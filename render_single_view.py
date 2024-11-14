@@ -1,3 +1,7 @@
+"""
+Usage:
+python render_single_view.py -m /path/to/model  -s /path/to/put/renders --view_index 23 --skip_test
+"""
 import torch
 from scene import Scene
 import os

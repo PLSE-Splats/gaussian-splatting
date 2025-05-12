@@ -8,6 +8,8 @@ Notes from the Splatting Team
 
 `playroom` is a model trained by Stanley using the image in `tandt_db/db/playroom`
 
-command for training: `python train.py -s .\tandt_db\db\playroom -m playroom --iterations 30000`
+command for training: `python train.py -s .\tandt_db\db\playroom -m playroom_skm_30000 --iterations 30000`
 
 command for rendering: `python render_single_view.py -m playroom -s tandt_db\db\playroom --view_index 23 --skip_test`
+
+I created a separate conda environment `guassian_splatting_original` which uses the `dr_aa` branch of their `diff-gaussian-rasterization` implementation.

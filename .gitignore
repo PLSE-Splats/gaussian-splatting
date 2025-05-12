@@ -7,3 +7,9 @@ diff_rasterization/dist
 tensorboard_3d
 screenshots
 Downloads/
+images/
+models/
+playroom/
+playroom_from_image_folder/
+tandt_db/
+temp_commands.txt

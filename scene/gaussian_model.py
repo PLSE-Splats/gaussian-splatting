@@ -452,6 +452,14 @@ class GaussianModel:
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, radii):
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
+        import csv
+        csv_path = os.path.join(os.path.dirname(__file__), "skm_grads_stats.csv")
+        with open(csv_path, mode='a', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            total_count = grads.shape[0]
+            high_grad_count = (grads > max_grad).sum().item()
+            high_count_ratio = high_grad_count / total_count if total_count > 0 else 0
+            writer.writerow([total_count, high_grad_count, high_count_ratio, grads.mean().item(), grads.var().item(), grads.max().item()])
 
         self.tmp_radii = radii
         self.densify_and_clone(grads, max_grad, extent)

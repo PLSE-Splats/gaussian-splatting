@@ -1,12 +1,12 @@
+
 import torch
-from diff_gaussian_rasterization import _RasterizeGaussians, GaussianRasterizationSettings
-from diff_gaussian_rasterization import GaussianRasterizer
 import copy
 import pickle
 import os
 import numpy as np
 from PIL import Image
 import torchvision.transforms as T
+from diff_gaussian_rasterization import GaussianRasterizer
 from utils.loss_utils import l1_loss, ssim
 
 dtype = torch.float32
@@ -14,6 +14,7 @@ device = 'cuda'
 torch.set_default_dtype(dtype)
 torch.set_default_device(device)
 
+# Load data and settings
 with open("../gs-splats/splats_data/grad_check_raster.pkl", "rb") as f:
     args = pickle.load(f)
     raster_settings = args["raster_settings"]
@@ -29,75 +30,126 @@ with open("../gs-splats/splats_data/grad_check_data.pkl", "rb") as f:
     colors_precomp = args["colors_precomp"].to(device=device, dtype=dtype) if args["colors_precomp"] is not None else None
     cov3D_precomp = args["cov3D_precomp"].to(device=device, dtype=dtype) if args["cov3D_precomp"] is not None else None
 
-target_img = Image.open("/home/jiexiao/research/skm-gs/data/playroom/model/train/ours_30000/gt/00028.png").convert("RGB")
+# Load target image
+target_path = "/home/jiexiao/research/skm-gs/data/playroom/model/train/ours_30000/gt/00028.png"
+target_img = Image.open(target_path).convert("RGB")
 transform = T.Compose([
-    T.ToTensor(),  # Converts to shape (C, H, W) and scales to [0, 1]
+    T.ToTensor(),
 ])
 target_img = transform(target_img).to(device=device, dtype=dtype)
 
+# Detached copies
+means3D_det = means3D.clone().detach()
+means2D_det = means2D.clone().detach()
+sh_det = sh.clone().detach()
+opacities_det = opacities.clone().detach()
+scales_det = scales.clone().detach()
+rotations_det = rotations.clone().detach()
+colors_det = colors_precomp.clone().detach() if colors_precomp is not None else None
+cov3D_det = cov3D_precomp.clone().detach() if cov3D_precomp is not None else None
 
-# alpha 3d grad check
-opacities_autograd = opacities.clone().requires_grad_(True)
-
-means3D_detached = means3D.clone().detach()
-means2D_detached = means2D.clone().detach()
-sh_detached = sh.clone().detach()
-colors_precomp_detached = colors_precomp.clone().detach() if colors_precomp is not None else None
-scales_detached = scales.clone().detach()
-rotations_detached = rotations.clone().detach()
-cov3D_precomp_detached = cov3D_precomp.clone().detach() if cov3D_precomp is not None else None
-
-# compute scalar loss
-def compute_loss_opacity(opacities_input):
+def compute_loss(means2D_in, opacities_in, scales_in, colors_in):
+    """
+    Generic rendering and loss computation.
+    """
     raster_settings_copy = copy.deepcopy(raster_settings)
     rasterizer = GaussianRasterizer(raster_settings=raster_settings_copy)
-
-    rendered_img, *_ = rasterizer(
-        means3D = means3D_detached,
-        means2D = means2D_detached,
-        shs = sh_detached,
-        colors_precomp = colors_precomp_detached,
-        opacities = opacities_input,
-        scales = scales_detached,
-        rotations = rotations_detached,
-        cov3D_precomp = cov3D_precomp_detached,
+    rendered, *_ = rasterizer(
+        means3D = means3D_det,
+        means2D = means2D_in,
+        shs = sh_det,
+        colors_precomp = colors_in,
+        opacities = opacities_in,
+        scales = scales_in,
+        rotations = rotations_det,
+        cov3D_precomp = cov3D_det,
     )
-
-    l1loss = l1_loss(rendered_img, target_img)
-    ssim_loss = ssim(rendered_img, target_img)
-    loss = 0.5 * l1loss + 0.5 * (1.0 - ssim_loss)
+    l1 = l1_loss(rendered, target_img)
+    ssim_loss = ssim(rendered, target_img)
+    loss = 0.5 * l1 + 0.5 * (1.0 - ssim_loss)
     return loss
 
+def grad_check(param_tensor, compute_loss_fn, name, eps=3e-3, num_check=100):
+    """
+    Generic gradient check: 
+      - param_tensor: tensor with requires_grad
+      - compute_loss_fn: function taking param and returning scalar loss
+      - name: string for printing
+    """
+    # Autograd gradient
+    param_autograd = param_tensor.clone().requires_grad_(True)
+    loss = compute_loss_fn(param_autograd)
+    torch.cuda.synchronize()
+    loss.backward()
+    grad_autograd = param_autograd.grad.clone().detach()
 
-loss = compute_loss_opacity(opacities_autograd)
-torch.cuda.synchronize()
-loss.backward()
-print("Loss:", loss.item())
-autograd_opacity = opacities_autograd.grad.clone().detach()
+    # Finite difference gradient
+    finite_grad = torch.zeros_like(param_tensor)
+    flat_autograd = grad_autograd.view(-1)
+    
+    # Take random indices for finite difference check
+    target_idx = torch.randperm(flat_autograd.numel(), device=device)
 
-# Find non-zero entries
-non_zero_indices = torch.nonzero(autograd_opacity.view(-1), as_tuple=True)[0]
-print("Non-zero opacity grad indices:", non_zero_indices[:10])
-print("Autograd Gradient (min, max):", autograd_opacity.min().item(), autograd_opacity.max().item())
+    for i in target_idx[:num_check]:
+        # positive
+        p_pos = param_tensor.clone().detach()
+        p_pos.view(-1)[i] += eps
+        loss_pos = compute_loss_fn(p_pos)
 
-# Finite Difference Gradient for opacity
-eps = 3e-3
-finite_diff_grad = torch.zeros_like(opacities)
+        # negative
+        p_neg = param_tensor.clone().detach()
+        p_neg.view(-1)[i] -= eps
+        loss_neg = compute_loss_fn(p_neg)
 
-for i in non_zero_indices[:10]:
-    op_pos = opacities.clone().detach()
-    op_pos.view(-1)[i] += eps
-    loss_pos = compute_loss_opacity(op_pos)
+        grad_val = (loss_pos - loss_neg) / (2 * eps)
+        finite_grad.view(-1)[i] = grad_val
 
-    op_neg = opacities.clone().detach()
-    op_neg.view(-1)[i] -= eps
-    loss_neg = compute_loss_opacity(op_neg)
+    # Metrics
+    min_aut, max_aut = grad_autograd.min().item(), grad_autograd.max().item()
+    min_fd, max_fd = finite_grad.min().item(), finite_grad.max().item()
+    sample_aut = flat_autograd[target_idx[:num_check]].cpu().numpy()
+    sample_fd = finite_grad.view(-1)[target_idx[:num_check]].cpu().numpy()
+    dist = torch.norm(flat_autograd - finite_grad.view(-1), p=2).item()
 
-    grad_val = (loss_pos - loss_neg) / (2 * eps)
-    finite_diff_grad.view(-1)[i] = grad_val
+    print(f"--- Grad Check for {name} ---")
+    print(f"Autograd grad (min, max): ({min_aut:.6e}, {max_aut:.6e})")
+    print(f"Finite-diff grad (min, max): ({min_fd:.6e}, {max_fd:.6e})")
+    print(f"Autograd sample: {sample_aut}")
+    print(f"Finite-diff sample: {sample_fd}")
+    print(f"L2 distance: {dist:.6e}\n")
 
-print("Finite Diff Gradient (min, max):", finite_diff_grad.min().item(), finite_diff_grad.max().item())
-print("Autograd Gradient (sample):", autograd_opacity.view(-1)[non_zero_indices[:10]])
-print("Finite Diff Gradient (sample):", finite_diff_grad.view(-1)[non_zero_indices[:10]])
+def main():
+    # Opacities
+    grad_check(
+        param_tensor=opacities_det,
+        compute_loss_fn=lambda x: compute_loss(means2D_det, x, scales_det, colors_det),
+        name="opacities",
+        eps=1e-2
+    )
 
-opacities_autograd.grad = None
+    # means2D
+    grad_check(
+        param_tensor=means2D_det,
+        compute_loss_fn=lambda x: compute_loss(x, opacities_det, scales_det, colors_det),
+        name="means2D",
+        eps=1e-2
+    )
+
+    # scales (conic2D)
+    grad_check(
+        param_tensor=scales_det,
+        compute_loss_fn=lambda x: compute_loss(means2D_det, opacities_det, x, colors_det),
+        name="scales",
+        eps=1e-1
+    )
+
+    # colors_precomp
+    # grad_check(
+    #     param_tensor=colors_det,
+    #     compute_loss_fn=lambda x: compute_loss(means2D_det, opacities_det, scales_det, x),
+    #     name="colors_precomp",
+    #     eps=1e-2
+    # )
+
+if __name__ == "__main__":
+    main()

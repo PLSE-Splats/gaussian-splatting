@@ -64,6 +64,7 @@ if __name__ == "__main__":
     parser.add_argument("--skip_test", action="store_true")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--view_index", default=0, type=int, help="Index of the view to render")
+    parser.add_argument("--twice", default=False, action="store_true", help="Render twice for memory testing")
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
 
@@ -72,3 +73,6 @@ if __name__ == "__main__":
 
     render_sets(model.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test,
                 args.view_index)
+    if args.twice:
+        render_sets(model.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test,
+                    args.view_index)

@@ -8,7 +8,7 @@
 [submodule "SIBR_viewers"]
 	path = SIBR_viewers
 	url = https://github.com/PLSE-Splats/sibr_core.git
-	branch = local-rasterizer
+	branch = shuffle-inputs
 [submodule "submodules/fused-ssim"]
 	path = submodules/fused-ssim
 	url = https://github.com/rahul-goel/fused-ssim.git

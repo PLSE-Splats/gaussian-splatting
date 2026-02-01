@@ -15,7 +15,7 @@ from arguments import ModelParams, PipelineParams, get_combined_args
 from gaussian_renderer import GaussianModel
 
 
-def render_view(model_path, name, iteration, views, gaussians, pipeline, background, view_index):
+def render_view(model_path, name, iteration, views, gaussians, pipeline, background, view_index, twice):
     render_path = os.path.join(model_path, name, f"ours_{iteration}", "renders")
     gts_path = os.path.join(model_path, name, f"ours_{iteration}", "gt")
 
@@ -25,6 +25,8 @@ def render_view(model_path, name, iteration, views, gaussians, pipeline, backgro
     print(f"Rendering view {view_index}")
     view = views[view_index]
     render_result = render(view, gaussians, pipeline, background)["render"]
+    if twice:
+        render(view, gaussians, pipeline, background)
     gt = view.original_image[0:3, :, :]
     torchvision.utils.save_image(render_result, os.path.join(str(render_path), f"{view_index:05d}.png"))
     torchvision.utils.save_image(gt, os.path.join(str(gts_path), f"{view_index:05d}.png"))
@@ -36,7 +38,8 @@ def render_sets(
         pipeline: PipelineParams,
         skip_train: bool,
         skip_test: bool,
-        view_index: int
+        view_index: int,
+        twice: bool,
 ):
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree)
@@ -47,11 +50,11 @@ def render_sets(
 
         if not skip_train:
             render_view(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline,
-                        background, view_index)
+                        background, view_index, twice)
 
         if not skip_test:
             render_view(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline,
-                        background, view_index)
+                        background, view_index, twice)
 
 
 if __name__ == "__main__":
@@ -72,7 +75,4 @@ if __name__ == "__main__":
     safe_state(args.quiet)
 
     render_sets(model.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test,
-                args.view_index)
-    if args.twice:
-        render_sets(model.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test,
-                    args.view_index)
+                args.view_index, args.twice)

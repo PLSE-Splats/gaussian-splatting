@@ -43,35 +43,38 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     speeds = []
     qualities = []
 
-    for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
-        rendering = \
-            render(view, gaussians, pipeline, background, use_trained_exp=train_test_exp, separate_sh=separate_sh)[
-                "render"]
-        gt = view.original_image[0:3, :, :]
-
-        if args.train_test_exp:
-            rendering = rendering[..., rendering.shape[-1] // 2:]
-            gt = gt[..., gt.shape[-1] // 2:]
-
-        torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
-        torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
-
+    for idx, view in enumerate(tqdm(views, desc="Testing progress")):
         # Speed test.
         if not args.skip_speed:
-            # Warm up.
-            for _ in range(500):
-                render(view, gaussians, pipeline, background, use_trained_exp=train_test_exp, separate_sh=separate_sh)
-
-            # Actual.
             deltas = 0
-            for _ in range(500):
+            for i in range(1000):
+                # Render.
                 pre_render = perf_counter()
                 render(view, gaussians, pipeline, background, use_trained_exp=train_test_exp, separate_sh=separate_sh)
-                deltas += perf_counter() - pre_render
+                post_render = perf_counter()
+
+                # Only use last 500.
+                if i >= 500:
+                    deltas += post_render - pre_render
             speeds.append([idx, 500 / deltas])
 
         # PSNR test.
         if not args.skip_quality:
+            # Render.
+            rendering = \
+                render(view, gaussians, pipeline, background, use_trained_exp=train_test_exp, separate_sh=separate_sh)[
+                    "render"]
+            gt = view.original_image[0:3, :, :]
+
+            if args.train_test_exp:
+                rendering = rendering[..., rendering.shape[-1] // 2:]
+                gt = gt[..., gt.shape[-1] // 2:]
+
+            # Save results.
+            torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
+            torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
+
+            # Compute PSNR.
             mse = torch.mean((gt - rendering) ** 2)
             d_psnr = 10 * torch.log10(1 / mse)
             qualities.append([idx, d_psnr.item()])
@@ -81,15 +84,16 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         speeds_np = np.array(speeds)
         fps_np = speeds_np[:, 1]
         print(f"FPS:\t{np.mean(fps_np)}\t[{np.min(fps_np)},\t{np.median(fps_np)},\t{np.max(fps_np)}]")
-        np.savetxt(os.path.join(base_path, "speeds.csv"), speeds_np, delimiter=",", header="Index,FPS", comments="")
+        np.savetxt(os.path.join(base_path, f"{args.branch}--speeds--{args.device}.csv"), speeds_np, delimiter=",",
+                   header="Index,FPS", comments="")
 
     # Write quality data.
     if not args.skip_quality:
         qualities_np = np.array(qualities)
         psnr_np = qualities_np[:, 1]
         print(f"PSNR:\t{np.mean(psnr_np)}\t[{np.min(psnr_np)},\t{np.median(psnr_np)},\t{np.max(psnr_np)}]")
-        np.savetxt(os.path.join(base_path, "qualities.csv"), qualities_np, delimiter=",", header="Index,PSNR",
-                   comments="")
+        np.savetxt(os.path.join(base_path, f"{args.branch}--qualities--{args.device}.csv"), qualities_np, delimiter=",",
+                   header="Index,PSNR", comments="")
 
 
 def render_sets(dataset: ModelParams, iteration: int, pipeline: PipelineParams, skip_train: bool, skip_test: bool,
@@ -121,6 +125,8 @@ if __name__ == "__main__":
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--skip_speed", action="store_true")
     parser.add_argument("--skip_quality", action="store_true")
+    parser.add_argument("--branch", default="base", type=str)
+    parser.add_argument("--device", default="4090", type=str)
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
 

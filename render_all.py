@@ -44,6 +44,11 @@ def get_render_scale(model_name):
         return 0.25  # Quarter resolution
 
 
+def get_resolution_divisor(render_scale):
+    """Convert a render scale into the matching camera loading divisor."""
+    return int(round(1.0 / render_scale))
+
+
 def benchmark_model(model_path, iteration, separate_sh, quiet):
     parser = ArgumentParser(description="Benchmark script parameters")
     model = ModelParams(parser, sentinel=True)
@@ -66,8 +71,11 @@ def benchmark_model(model_path, iteration, separate_sh, quiet):
 
     model_name = os.path.basename(os.path.normpath(model_path))
     render_scale = get_render_scale(model_name)
+    args.resolution = get_resolution_divisor(render_scale)
 
-    print(f"Benchmarking {args.model_path} (render scale: {render_scale})")
+    print(
+        f"Benchmarking {args.model_path} (render scale: {render_scale}, resolution: {args.resolution})"
+    )
     safe_state(args.quiet)
 
     dataset = model.extract(args)

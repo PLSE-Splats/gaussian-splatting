@@ -12,13 +12,14 @@
 import torch
 from scene import Scene
 import os
+import sys
 from tqdm import tqdm
 from os import makedirs
 from gaussian_renderer import render
 import torchvision
 from utils.general_utils import safe_state
 from argparse import ArgumentParser
-from arguments import ModelParams, PipelineParams
+from arguments import ModelParams, PipelineParams, get_combined_args
 from gaussian_renderer import GaussianModel
 from utils.image_utils import psnr
 from utils.loss_utils import ssim
@@ -108,56 +109,45 @@ def compute_metrics(render_path, gts_path):
     return avg_psnr, avg_ssim, avg_lpips
 
 
-def infer_source_path(model_path):
-    """Infer source path from model path or cfg_args file"""
-    model_path = Path(model_path)
-    
-    # If models are in 3dgs_models/models/bicycle
-    # Source images are in 3dgs_models/source/bicycle
-    scene_name = model_path.name
-    parent = model_path.parent
-    
-    # Check if parent directory is named "models"
-    # Go up one level and look for "source" sibling directory
-    grandparent = parent.parent
-    source_dir = grandparent / "source" / scene_name
-    if source_dir.exists():
-        print(f"Inferred source path from directory structure: {source_dir}")
-        return str(source_dir)
-    
-    
-    print(f"Warning: Could not infer source path for model {model_path}")
-    return ""
+def load_model_args(model_path, iteration, quiet=False):
+    parser = ArgumentParser(description="Benchmark script parameters")
+    model = ModelParams(parser, sentinel=True)
+    pipeline = PipelineParams(parser)
+    parser.add_argument("--iteration", default=-1, type=int)
+    parser.add_argument("--quiet", action="store_true")
+
+    args_list = ["--model_path", model_path]
+    if iteration >= 0:
+        args_list.extend(["--iteration", str(iteration)])
+    if quiet:
+        args_list.append("--quiet")
+
+    old_argv = sys.argv
+    try:
+        sys.argv = [old_argv[0], *args_list]
+        args = get_combined_args(parser)
+    finally:
+        sys.argv = old_argv
+
+    args.eval = True
+    args.depths = ""
+
+    dataset = model.extract(args)
+    pipeline_params = pipeline.extract(args)
+    return dataset, pipeline_params, args
 
 
-def benchmark_model(model_path, iteration, sh_degree, white_background, num_loops=200):
+def benchmark_model(model_path, iteration, num_loops=200, quiet=False):
     """Benchmark a single model"""
     print(f"\n{'='*80}")
     print(f"Benchmarking model: {model_path}")
     print(f"{'='*80}\n")
     
     with torch.no_grad():
-        # Infer source path
-        source_path = infer_source_path(model_path)
-        
-        # Create a minimal dataset params object
-        class DatasetParams:
-            def __init__(self, model_path, sh_degree, white_background, source_path):
-                self.model_path = model_path
-                self.sh_degree = sh_degree
-                self.source_path = source_path
-                self.images = "images"
-                self.resolution = -1
-                self.white_background = white_background
-                self.data_device = "cuda"
-                self.eval = False
-                self.train_test_exp = False
-                self.depths = ""
-        
-        dataset = DatasetParams(model_path, sh_degree, white_background, source_path)
-        
-        # Load the model
-        gaussians = GaussianModel(sh_degree)
+        dataset, pipeline, args = load_model_args(model_path, iteration, quiet)
+
+        # Load the model with cfg_args-derived settings
+        gaussians = GaussianModel(dataset.sh_degree)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
         
         # Get test cameras
@@ -168,18 +158,9 @@ def benchmark_model(model_path, iteration, sh_degree, white_background, num_loop
             return None
         
         # Setup background
-        bg_color = [1, 1, 1] if white_background else [0, 0, 0]
+        bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-        
-        # Create pipeline params
-        class PipelineParamsSimple:
-            def __init__(self):
-                self.convert_SHs_python = False
-                self.compute_cov3D_python = False
-                self.debug = False
-        
-        pipeline = PipelineParamsSimple()
-        
+
         # Render and save test set
         render_and_save_test_set(
             model_path, 
@@ -228,14 +209,13 @@ def main():
     parser = ArgumentParser(description="Benchmark all models in a directory")
     parser.add_argument("--models_path", "-m", required=True, type=str, help="Path to directory containing trained models")
     parser.add_argument("--iteration", default=-1, type=int, help="Iteration to load (-1 for latest)")
-    parser.add_argument("--sh_degree", default=3, type=int, help="Spherical harmonics degree")
-    parser.add_argument("--white_background", action="store_true", help="Use white background")
     parser.add_argument("--num_loops", default=200, type=int, help="Number of loops for warmup and benchmark")
     parser.add_argument("--output_csv", default="benchmark.csv", type=str, help="Output CSV file name")
+    parser.add_argument("--quiet", action="store_true", help="Suppress output")
     args = parser.parse_args()
     
     # Initialize CUDA
-    safe_state(False)
+    safe_state(args.quiet)
     
     # Find all model directories
     models_path = Path(args.models_path)
@@ -247,8 +227,8 @@ def main():
     model_dirs = []
     for item in models_path.iterdir():
         if item.is_dir():
-            # Check if it looks like a trained model (has point_cloud directory)
-            if (item / "point_cloud").exists():
+            # Require cfg_args so model-specific training settings can be restored
+            if (item / "point_cloud").exists() and (item / "cfg_args").is_file():
                 model_dirs.append(item)
     
     if len(model_dirs) == 0:
@@ -264,9 +244,8 @@ def main():
             result = benchmark_model(
                 str(model_dir),
                 args.iteration,
-                args.sh_degree,
-                args.white_background,
-                args.num_loops
+                args.num_loops,
+                args.quiet
             )
             if result is not None:
                 results.append(result)

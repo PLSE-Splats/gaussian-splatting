@@ -265,7 +265,7 @@ def main():
     
     # Write results to CSV
     if len(results) > 0:
-        output_path = Path(args.models_path) / args.output_csv
+        output_path = args.output_csv
         with open(output_path, 'w', newline='') as csvfile:
             fieldnames = ['model_name', 'fps', 'psnr', 'ssim', 'lpips']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)

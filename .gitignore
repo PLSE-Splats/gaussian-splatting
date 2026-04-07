@@ -228,3 +228,4 @@ $RECYCLE.BIN/
 
 submodules/diff-gaussian-rasterization-og.7z
 /submodules/simple-knn/build/
+*.csv

@@ -17,6 +17,8 @@ from tqdm import tqdm
 from os import makedirs
 from gaussian_renderer import render
 import torchvision
+from PIL import Image
+import numpy as np
 from utils.general_utils import safe_state
 from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, get_combined_args
@@ -86,11 +88,18 @@ def compute_metrics(render_path, gts_path):
     gts = []
     
     for fname in sorted(os.listdir(renders_dir)):
-        render_img = torchvision.io.read_image(str(renders_dir / fname)).float() / 255.0
-        gt_img = torchvision.io.read_image(str(gt_dir / fname)).float() / 255.0
-        
-        renders.append(render_img.unsqueeze(0)[:, :3, :, :].cuda())
-        gts.append(gt_img.unsqueeze(0)[:, :3, :, :].cuda())
+        if not fname.lower().endswith(".png"):
+            continue
+
+        render_img = np.array(Image.open(renders_dir / fname).convert("RGB"), dtype=np.float32) / 255.0
+        gt_img = np.array(Image.open(gt_dir / fname).convert("RGB"), dtype=np.float32) / 255.0
+
+        renders.append(
+            torch.from_numpy(render_img).permute(2, 0, 1).contiguous().unsqueeze(0).cuda()
+        )
+        gts.append(
+            torch.from_numpy(gt_img).permute(2, 0, 1).contiguous().unsqueeze(0).cuda()
+        )
     
     psnrs = []
     ssims = []
@@ -183,7 +192,7 @@ def benchmark_model(model_path, iteration, num_loops=200, quiet=False):
             SPARSE_ADAM_AVAILABLE,
             num_loops
         )
-        
+
         print(f"\nAverage FPS: {avg_fps:.2f}")
         
         # Compute metrics
